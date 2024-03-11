@@ -15,7 +15,7 @@ from openai import OpenAI
 load_dotenv()
 
 # Initialize Elasticsearch client
-index_name = "search-ikms-assistants"
+index_name = "ikms-assistants"
 
 openai.api_key = os.environ["OPENAI_API_KEY"]
 
