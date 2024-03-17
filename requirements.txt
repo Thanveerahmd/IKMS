@@ -2,3 +2,6 @@ streamlit
 openai==1.1.1
 python-dotenv
 elasticsearch
+chainlit
+langchain
+stability_sdk==0.8.0
