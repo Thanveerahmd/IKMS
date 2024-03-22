@@ -254,7 +254,7 @@ async def search_documents(user_query: str):
     "DOMAIN: {domains} \n"
     "USER_QUERY : {user_query}\n"
     "---------------------\n"
-
+    
     Below is the framework which I will strictly follow.
 
     1.0 First, refer to KEYWORDS and DOMAIN to understand all the existing keywords and domains in the elastic database.
@@ -267,7 +267,7 @@ async def search_documents(user_query: str):
     For example:
 
     ---
-    {{ "Keywords":"[selected keyword list for user ]"
+    {{ "Keywords":"[selected keyword list for user]"
 
       "Domains": "[selected domain list for user]"}}
     ---
@@ -337,7 +337,7 @@ async def filter_documents(data_dict: Dict):
     data_list = [{
         "Document Id": hit['_id'],
         "Document Name": hit['_source']['Document Name'],
-        "Document path": hit['_source']['Source']
+        "Document path": hit['_source']['Document Source']
     } for hit in hits_list]
 
     document_paths = [document["Document path"] for document in data_list]
