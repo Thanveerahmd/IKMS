@@ -41,7 +41,7 @@ def create_or_update_assistant(assistant_id, assistant_name, document_body):
     if not es.indices.exists(index=index_name):
         es.indices.create(index=index_name)
     if assistant_id != 'New':  # Update existing assistant
-        es.update(index=index_name, id=assistant_id, document=document_body)
+        es.update(index=index_name, id=assistant_id, doc=document_body)
         st.success(f"Assistant {assistant_name} updated successfully!")
     else:  # Create new assistant
         es.index(index=index_name, document=document_body)
@@ -172,8 +172,9 @@ def main():
     if not assistant_df.empty:
 
         with st.expander("Assistants", expanded=True):
+            assistant_df_display = assistant_df.drop(columns=['Prompt'], errors='ignore')
             st.write("Assistants:")
-            st.table(assistant_df)
+            st.table(assistant_df_display)
 
         name_to_id = pd.Series(assistant_df.id.values, index=assistant_df.assistant_name).to_dict()
         id_to_assistant = pd.Series(assistant_df.assistant_id.values, index=assistant_df.id).to_dict()
