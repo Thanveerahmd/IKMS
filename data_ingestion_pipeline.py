@@ -1,23 +1,22 @@
-import streamlit as st
-from elasticsearch import Elasticsearch
-from mutagen.easyid3 import EasyID3
-from moviepy.editor import AudioFileClip, ImageClip
-import pandas as pd
-from dotenv import load_dotenv
-import os
-import pandas as pd
-import os
-import getpass
-import openai
-import time
 import json
+import os
 import re
-from openai import OpenAI
+import time
+import base64
 from pathlib import Path
-from pytube import YouTube
+
+import openai
+import streamlit as st
+from dotenv import load_dotenv
+from elasticsearch import Elasticsearch
+from moviepy.editor import AudioFileClip, ImageClip
 from moviepy.editor import VideoFileClip
+from openai import OpenAI
 from pydub import AudioSegment
-from videodb import connect, play_stream
+from pytube import YouTube
+from videodb import connect
+
+from prompts import image_meta_summarizer
 
 load_dotenv()
 
@@ -270,7 +269,6 @@ def search_assistant_by_name(assistant_name, index_name):
 
 
 def process_file(file_path, assistant_name):
-
     file = client.files.create(
         file=open(file_path, 'rb'),
         purpose="assistants"
@@ -379,18 +377,61 @@ def get_unique_sys_domains():
     return unique_sys_domains
 
 
-def process_and_index_files(file_path, file_name, index, file_type, assistant_name, vedio_id=None, file_loc=None):
+def encode_image(image_path):
+    with open(image_path, "rb") as image_file:
+        return base64.b64encode(image_file.read()).decode('utf-8')
+
+
+def process_image_file(image_path):
+    base64_image = encode_image(image_path)
+
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": image_meta_summarizer},
+                {
+                    "type": "image_url",
+                    "image_url": f"data:image/jpeg;base64,{base64_image}",
+                },
+            ],
+        }
+    ]
+
     try:
-        parsed_json = process_file(file_path, assistant_name)
+        response = client.chat.completions.create(
+            model="gpt-4-vision-preview", messages=messages, max_tokens=500
+        )
+        text = response.choices[0].message.content
+
+        parsed_json = clean_and_parse_json(text)
+
+        return parsed_json
+
+    except Exception as e:
+        print(f"An error occurred: {e}")
+
+
+def process_and_index_files(file_path, file_name, index, file_type, assistant_name=None, vedio_id=None, file_loc=None):
+    try:
+
+        if assistant_name is not None:
+            parsed_json = process_file(file_path, assistant_name)
+        else:
+            parsed_json = process_image_file(file_path)
+
         parsed_json['Document Source'] = file_path
         parsed_json['Document Name'] = file_name
         parsed_json['Data Type'] = file_type
+
         if vedio_id is not None:
             parsed_json[file_type + ' Source'] = file_loc
             parsed_json['Video Id'] = vedio_id  # Only add if vedio_id is provided
+
         # Index the document into Elasticsearch
         es.index(index=index, document=parsed_json)
         st.write(f"Processed and indexed {file_name}")
+
     except Exception as e:
         st.error(f"Error processing {file_name}: {str(e)}")
 
@@ -403,9 +444,28 @@ def main():
     # Expander for image uploads
     with st.expander("Upload Images"):
         image_files = st.file_uploader("Choose image files", type=['png', 'jpg', 'jpeg'], accept_multiple_files=True)
+
         if image_files is not None:
-            for image_file in image_files:
-                st.image(image_file, caption=image_file.name)
+            total_files = len(image_files)
+            progress_bar = st.progress(0)
+
+            for index, file in enumerate(image_files):
+
+                st.image(file, caption=file.name)
+
+                with st.spinner(f'Processing and indexing {file.name}...'):
+
+                    saved_file_path, title = save_uploaded_file("IKMS Data Repo/Image", file)
+
+                    if saved_file_path:  # If the file was successfully saved
+                        process_and_index_files(saved_file_path, file.name, document_index, "Image")
+
+                st.success(f'Finished processing Image {file.name}')
+
+                progress_percentage = int(((index + 1) / total_files) * 100)
+                progress_bar.progress(progress_percentage)
+
+            st.success("Finished processing all the Images.")
 
     # Expander for text document uploads
     with st.expander("Upload Text Documents"):
@@ -499,7 +559,7 @@ def main():
             with st.spinner('Transcribing audio to text...'):
                 try:
                     text_data = audio_to_text(output_audio_path)
-                    text_output_path = "IKMS Data Repo/Text/" + title + "_text.txt"
+                    text_output_path = "IKMS Data Repo/Text/" + sanitize_filename(video_metadata["Title"]) + "_text.txt"
                     with open(text_output_path, "w") as file:
                         file.write(text_data)
                     st.success(f'Text data saved to file: {text_output_path}')
@@ -511,7 +571,7 @@ def main():
                                             "Video",
                                             "Meta Transcript Creator",
                                             vedio_id=video_id,
-                                            file_loc=saved_file_path
+                                            file_loc=video_metadata["FilePath"]
                                             )
                 except Exception as e:
                     st.error(f"Error during transcription: {e}")
@@ -550,8 +610,10 @@ def main():
                 with st.spinner('Transcribing audio to text...'):
                     text_data = audio_to_text(saved_file_path, is_audio=True)
                     text_output_path = "IKMS Data Repo/Text/" + title + "_text.txt"
-                    with open(text_output_path, "w") as file:
+
+                    with open(text_output_path, 'w', encoding='utf-8') as file:
                         file.write(text_data)
+
                     st.success(f'Text data saved to file: {text_output_path}')
 
                 process_and_index_files(text_output_path,
