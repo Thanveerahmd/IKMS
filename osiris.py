@@ -1,10 +1,14 @@
+import ast
 import json
 import os
-import ast
-from chainlit.types import ThreadDict
-from pathlib import Path
 from datetime import datetime
-from typing import Dict, Any, List
+from pathlib import Path
+from typing import Any, List, Optional, Dict
+
+import chainlit as cl
+from chainlit.element import Element
+from chainlit.types import ThreadDict
+from elasticsearch import Elasticsearch
 from openai import AsyncOpenAI
 from openai.types.beta import Thread
 from openai.types.beta.threads import (
@@ -14,13 +18,8 @@ from openai.types.beta.threads import (
 )
 from openai.types.beta.threads.runs import RunStep
 from openai.types.beta.threads.runs.tool_calls_step_details import ToolCall
-import os
-import time
-import json
-import re
-from elasticsearch import Elasticsearch
-from chainlit.element import Element
-import chainlit as cl
+
+from prompts import es_retrieve_query_prompt
 
 api_key = os.environ.get("OPENAI_API_KEY")
 assistant_id = os.environ.get("ASSISTANT_ID")
@@ -38,6 +37,16 @@ es = Elasticsearch(
     os.getenv('ES_END_POINT'),  # Elasticsearch endpoint
     api_key=os.getenv('ES_API_KEY'),  # API key ID and secret
 )
+
+
+@cl.oauth_callback
+def oauth_callback(
+        provider_id: str,
+        token: str,
+        raw_user_data: Dict[str, str],
+        default_user: cl.User,
+) -> Optional[cl.User]:
+    return default_user
 
 
 @cl.author_rename
@@ -94,10 +103,25 @@ async def process_files(files: List[Element]):
     return file_ids
 
 
-
 async def process_thread_message(
-        message_references: Dict[str, cl.Message], thread_message: ThreadMessage
+        message_references: Dict[str, cl.Message], thread_message: ThreadMessage,
+file_sources : Dict[str, str]
 ):
+    elements = []  # Initialize the elements list
+
+    # Check each data type and add corresponding element(s) to the elements list
+    for data_type, sources in file_sources.items():
+        for source in sources:
+            if data_type == "text":
+                elements.append(cl.Pdf(name=source, display="inline", path=source))
+            elif data_type == "image":
+                elements.append(cl.Image(path=source, name=source, display="inline"))
+            elif data_type == "audio":
+                elements.append(cl.Audio(name=source, path=source, display="inline"))
+            elif data_type == "video":
+                elements.append(cl.Video(name=source, path=source, display="inline"))
+
+
     for idx, content_message in enumerate(thread_message.content):
         id = thread_message.id + str(idx)
         if isinstance(content_message, MessageContentText):
@@ -107,7 +131,9 @@ async def process_thread_message(
                 await msg.update()
             else:
                 message_references[id] = cl.Message(
-                    author=thread_message.role, content=content_message.text.value
+                    author=thread_message.role,
+                    content=content_message.text.value,
+                    elements=elements,
                 )
                 await message_references[id].send()
         elif isinstance(content_message, MessageContentImageFile):
@@ -185,10 +211,8 @@ class DictToObject:
 async def start_chat():
     thread = await client.beta.threads.create()
     cl.user_session.set("thread", thread)
-    await cl.Message(
-        content="What would you like to know today ?",
-        disable_feedback=False,
-    ).send()
+    app_user = cl.user_session.get("user")
+    await cl.Message(f"Hello {app_user.identifier}").send()
 
 
 @cl.step(name="Document Search Query Builder", root=True)
@@ -242,38 +266,9 @@ async def search_documents(user_query: str):
     unique_domains = [bucket['key'] for bucket in
                       domains_response['aggregations']['nested_metadata']['unique_domains']['buckets']]
 
-    prompt = """
-    I am the retriever, an expert in selecting Keywords and Domains variables to search an elastic db from KEYWORDS and DOMAIN set provided in the below section. I will receive the USER_QUERY and then analyze the request to understand the domain and the keywords.
-
-    KEYWORDS are a representation of all the keywords in all the documents in the elastic search index and DOMAIN is a representation of all the categories of all the documents in the elastic search index, for example, it could be medical, finance, HR, etc.
-
-    Given the provided Below information\n,
-
-    "---------------------\n"
-    "KEYWORDS: {keywords}\n"
-    "DOMAIN: {domains} \n"
-    "USER_QUERY : {user_query}\n"
-    "---------------------\n"
-    
-    Below is the framework which I will strictly follow.
-
-    1.0 First, refer to KEYWORDS and DOMAIN to understand all the existing keywords and domains in the elastic database.
-
-    2.0 THEN Analyze the USER_QUERY to understand which DOMAIN the user query belongs to and what KEYWORDS the query reflects.
-    3.0 ALWAYS match the user domain and keywords to the provided DOMAIN and KEYWORDS.
-
-    3.0 The output Will always be only as python dictionary mode with no other accompanying text.
-
-    For example:
-
-    ---
-    {{ "Keywords":"[selected keyword list for user]"
-
-      "Domains": "[selected domain list for user]"}}
-    ---
-    """
-
-    prompt = prompt.format(keywords=unique_doc_keywords, domains=unique_domains, user_query=user_query)
+    prompt = es_retrieve_query_prompt.format(keywords=unique_doc_keywords,
+                                             domains=unique_domains,
+                                             user_query=user_query)
 
     agent_response = await client.chat.completions.create(
         model="gpt-4-turbo-preview",
@@ -294,7 +289,6 @@ async def search_documents(user_query: str):
 
 @cl.step(name="Document filter Agent", root=True)
 async def filter_documents(data_dict: Dict):
-
     should_clauses = [{"match": {"Metadata.Domain": domain}} for domain in data_dict['Domains']]
 
     query_map = {
@@ -342,26 +336,56 @@ async def filter_documents(data_dict: Dict):
 
     document_paths = [document["Document path"] for document in data_list]
 
-    return document_paths
+    # Initialize file_sources as a dictionary
+    file_sources = {
+        "text": [],
+        "image": [],
+        "audio": [],
+        "video": []
+    }
+
+    # Loop through each document in the hits list
+    for hit in hits_list:
+        # Fetch the Data Type for the current document
+        data_type = hit['_source'].get("Data Type", "").lower()  # Make case insensitive
+
+        # Conditional checks to decide which source value to add
+        if data_type in ["text", "image"]:
+            source = hit['_source'].get("Document Source", None)
+            if source:  # Ensure source is not None or empty before appending
+                file_sources[data_type].append(source)
+        elif data_type == "audio":
+            source = hit['_source'].get("Audio Source", None)
+            if source:
+                file_sources[data_type].append(source)
+        elif data_type == "video":
+            source = hit['_source'].get("Video Source", None)
+            if source:
+                file_sources[data_type].append(source)
+
+    return document_paths, file_sources
 
 
 @cl.step(name="Osiris", type="run", root=True)
-async def run(thread_id: str, human_query: str, file_ids: List[str] = []):
+async def run_osiris(thread_id: str, human_query: str, file_ids: List[str] = [], update=True,file_sources: Dict[str, list] = None):
+    if file_sources is None:
+        file_sources = {}
 
     osiris_agent = await client.beta.assistants.retrieve(assistant_id)
 
-    await client.beta.assistants.update(
-        assistant_id,
-        instructions=osiris_agent.instructions,
-        name=osiris_agent.name,
-        tools=[{"type": "retrieval"}],
-        model="gpt-4-turbo-preview",
-        file_ids=file_ids,
-    )
+    if update:
+        await client.beta.assistants.update(
+            assistant_id,
+            instructions=osiris_agent.instructions,
+            name=osiris_agent.name,
+            tools=[{"type": "retrieval"}],
+            model="gpt-4-turbo-preview",
+            file_ids=file_ids,
+        )
 
     # Add the message to the thread
     init_message = await client.beta.threads.messages.create(
-        thread_id=thread_id, role="user", content=human_query, file_ids=file_ids
+        thread_id=thread_id, role="user", content=human_query
     )
 
     # Create the run
@@ -373,6 +397,7 @@ async def run(thread_id: str, human_query: str, file_ids: List[str] = []):
     step_references = {}  # type: Dict[str, cl.Step]
     tool_outputs = []
     # Periodically check for updates
+
     while True:
         run = await client.beta.threads.runs.retrieve(
             thread_id=thread_id, run_id=run.id
@@ -395,7 +420,7 @@ async def run(thread_id: str, human_query: str, file_ids: List[str] = []):
                     message_id=step_details.message_creation.message_id,
                     thread_id=thread_id,
                 )
-                await process_thread_message(message_references, thread_message)
+                await process_thread_message(message_references, thread_message,file_sources)
 
             if step_details.type == "tool_calls":
                 for tool_call in step_details.tool_calls:
@@ -467,20 +492,75 @@ async def run(thread_id: str, human_query: str, file_ids: List[str] = []):
             break
 
 
-@cl.on_message
-async def on_message(message_from_ui: cl.Message):
-    thread = cl.user_session.get("thread")  # type: Thread
-    # files_ids = await process_files(message_from_ui.elements)
-    es_search_query = await search_documents(user_query=message_from_ui.content)
-    file_paths = await filter_documents(data_dict=es_search_query)
-    files_ids = await upload_files_from_path(file_paths)
+# @cl.on_message
+# async def on_message(message_from_ui: cl.Message):
+#     thread = cl.user_session.get("thread")  # type: Thread
+#     es_search_query = await search_documents(user_query=message_from_ui.content)
+#     file_paths = await filter_documents(data_dict=es_search_query)
+#     files_ids = await upload_files_from_path(file_paths)
+#
+#     await run(
+#         thread_id=thread.id, human_query=message_from_ui.content, file_ids=files_ids
+#     )
 
-    await run(
-        thread_id=thread.id, human_query=message_from_ui.content, file_ids=files_ids
-    )
+
+@cl.on_message
+async def main(message_from_ui: cl.Message):
+    thread = cl.user_session.get("thread")
+
+    # Initial message to ask the user for their preference
+    if not cl.user_session.get("has_made_initial_choice"):
+        res = await cl.AskActionMessage(
+            content="Do you wish to continue with the RAG approach or the normal assistant?",
+            actions=[
+                cl.Action(name="rag", value="rag", label="Create a RAG Assistant"),
+                cl.Action(name="normal", value="normal", label="Use Normal Assistant"),
+            ],
+        ).send()
+
+        # Save the user's initial choice to session
+        cl.user_session.set("has_made_initial_choice", True)
+    else:
+        # Follow up based on user's initial choice
+        res = await cl.AskActionMessage(
+            content="Do you wish to continue with the same method, switch to the other, or try a new RAG?",
+            actions=[
+                cl.Action(name="continue", value="continue", label="Continue Current Assistant"),
+                cl.Action(name="normal", value="normal", label="Use Normal Assistant"),
+                cl.Action(name="new_rag", value="new_rag", label="Create a New RAG Assistant"),
+            ],
+        ).send()
+
+        # Handle user's choice
+        if res and res.get("value") == "rag":
+            es_search_query = await search_documents(user_query=message_from_ui.content)
+            paths = await filter_documents(data_dict=es_search_query)
+            files_ids = await upload_files_from_path(paths[0])
+
+            await run_osiris(
+                thread_id=thread.id, human_query=message_from_ui.content, file_ids=files_ids,
+                file_sources=paths[1]
+            )
+        elif res and res.get("value") == "normal":
+            await run_osiris(
+                thread_id=thread.id, human_query=message_from_ui.content
+            )
+        elif res and res.get("value") == "continue":
+            await run_osiris(
+                thread_id=thread.id, human_query=message_from_ui.content, update=False)
+        elif res and res.get("value") == "new_rag":
+            es_search_query = await search_documents(user_query=message_from_ui.content)
+            paths = await filter_documents(data_dict=es_search_query)
+            files_ids = await upload_files_from_path(paths[0])
+
+            await run_osiris(
+                thread_id=thread.id, human_query=message_from_ui.content, file_ids=files_ids,
+                file_sources=paths[1]
+            )
 
 
 @cl.on_chat_resume
 async def on_chat_resume(thread: ThreadDict):
-    cl.user_session.set("thread", thread)
-    print("The user resumed a previous chat session!")
+    root_messages = [m for m in thread["steps"] if m["parentId"] == None]
+    app_user = cl.user_session.get("user")
+    await cl.Message(f"Welcome back {app_user.identifier}").send()

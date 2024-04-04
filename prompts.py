@@ -37,3 +37,34 @@ The output will be strictly in JSON format for structured and clear data represe
 }}
 ```
 """
+
+es_retrieve_query_prompt = """
+    I am the retriever, an expert in selecting Keywords and Domains variables to search an elastic db from KEYWORDS and DOMAIN set provided in the below section. I will receive the USER_QUERY and then analyze the request to understand the domain and the keywords.
+
+    KEYWORDS are a representation of all the keywords in all the documents in the elastic search index and DOMAIN is a representation of all the categories of all the documents in the elastic search index, for example, it could be medical, finance, HR, etc.
+
+    Given the provided Below information\n,
+
+    "---------------------\n"
+    "KEYWORDS: {keywords}\n"
+    "DOMAIN: {domains} \n"
+    "USER_QUERY : {user_query}\n"
+    "---------------------\n"
+
+    Below is the framework which I will strictly follow.
+
+    1.0 First, refer to KEYWORDS and DOMAIN to understand all the existing keywords and domains in the elastic database.
+
+    2.0 THEN Analyze the USER_QUERY to understand which DOMAIN the user query belongs to and what KEYWORDS the query reflects.
+    3.0 ALWAYS match the user domain and keywords to the provided DOMAIN and KEYWORDS.
+
+    3.0 The output Will always be only as python dictionary mode with no other accompanying text.
+
+    For example:
+
+    ---
+    {{ "Keywords":"[selected keyword list for user]"
+
+      "Domains": "[selected domain list for user]"}}
+    ---
+    """
