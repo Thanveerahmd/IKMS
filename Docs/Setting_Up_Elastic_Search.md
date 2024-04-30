@@ -7,7 +7,37 @@
 
 3. **Open Dev Tools**: In the Elasticsearch dashboard, locate and click on the "Dev Tools" to access the Console.
 
-4. **Create 'meta-summary-registry' Index**: In the Console, execute the following command to create the `meta-summary-registry` index with the specified settings and mappings:
+4.  **Create 'ikms-assistants' Index**: In the Console, execute the following command to create the `ikms-assistants` index with the specified settings and mappings:
+
+```json
+PUT /ikms-assistants
+{
+    "settings": {
+        "number_of_shards": 1
+    },
+    "mappings": {
+        "properties": {
+            "Prompt": {
+                "type": "text"
+            },
+            "assistant_id": {
+                "type": "text"
+            },
+            "assistant_name": {
+                "type": "text",
+                "fields": {
+                    "keyword": {
+                        "type": "keyword",
+                        "ignore_above": 256
+                    }
+                }
+            }
+        }
+    }
+}
+```
+
+5. **Create 'meta-summary-registry' Index**: In the Console, execute the following command to create the `meta-summary-registry` index with the specified settings and mappings:
 
 ```json
 PUT /meta-summary-registry
