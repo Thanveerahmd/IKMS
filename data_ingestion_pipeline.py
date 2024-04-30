@@ -17,6 +17,7 @@ from pytube import YouTube
 from videodb import connect
 
 from prompts import image_meta_summarizer
+from config import Assistants
 
 load_dotenv()
 
@@ -481,7 +482,8 @@ def main():
                 with st.spinner(f'Processing and indexing {file.name}...'):
                     saved_file_path, title = save_uploaded_file("IKMS Data Repo/Text", file)
                     if saved_file_path:  # If the file was successfully saved
-                        process_and_index_files(saved_file_path, file.name, document_index, "Text", "Meta Doc Creator")
+                        process_and_index_files(saved_file_path, file.name, document_index, "Text",
+                                                Assistants.META_DOC_CREATOR.value)
                 st.success(f'Finished processing {file.name}')
 
                 progress_percentage = int(((index + 1) / total_files) * 100)
@@ -524,7 +526,7 @@ def main():
                                                 file.name,
                                                 document_index,
                                                 "Video",
-                                                "Meta Transcript Creator",
+                                                Assistants.META_TRANSCRIPT_CREATOR.value,
                                                 vedio_id=video_id,
                                                 file_loc=saved_file_path)
                     except Exception as e:
@@ -569,7 +571,7 @@ def main():
                                             file.name,
                                             document_index,
                                             "Video",
-                                            "Meta Transcript Creator",
+                                            Assistants.META_TRANSCRIPT_CREATOR.value,
                                             vedio_id=video_id,
                                             file_loc=video_metadata["FilePath"]
                                             )
@@ -620,7 +622,8 @@ def main():
                                         file.name,
                                         document_index,
                                         "Audio",
-                                        "Meta Transcript Creator",
+                                        Assistants.META_TRANSCRIPT_CREATOR.value
+                                        ,
                                         vedio_id=video_id,
                                         file_loc=saved_file_path)
 
