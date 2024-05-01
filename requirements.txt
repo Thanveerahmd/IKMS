@@ -11,3 +11,4 @@ soundfile
 ffmpeg-python
 videodb
 mutagen
+streamlit_code_editor
